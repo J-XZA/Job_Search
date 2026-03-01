@@ -52,47 +52,227 @@ Then retry SSH.
 
 ---
 
-## What should I do before running setup?
+## Pre-setup checklist (very specific)
 
-Use this preflight checklist **before** `create_openclaw_aws.sh`:
+Use this checklist **before** running `./scripts/create_openclaw_aws.sh`.
 
-1. **Install dependencies**
-   - `aws` CLI
-   - `bash` (v4+ recommended)
+### 0) Decide exactly what you are building
 
-2. **Authenticate AWS CLI**
-   - Run `aws configure` (or use SSO/profile-based auth).
-   - Confirm identity:
-     ```bash
-     aws sts get-caller-identity
-     ```
+You are preparing one EC2 VM that will:
 
-3. **Set region/profile intentionally**
-   - Either pass `--region` to the script, or set `AWS_REGION`/`AWS_DEFAULT_REGION`.
-   - If using a non-default profile:
-     ```bash
-     export AWS_PROFILE=<profile-name>
-     ```
+- Run Docker + OpenClaw.
+- Call Anthropic APIs using your API key.
+- Be reachable over SSH from your machine.
 
-4. **Confirm required IAM permissions**
-   - EC2: create/run/describe/terminate instances, security groups, key pairs.
-   - VPC/Subnet describe permissions.
-   - SSM parameter read (`/aws/service/ami-amazon-linux-latest/...`).
+That means you must prepare **three resource categories** ahead of time:
 
-5. **Prepare your Anthropic key securely**
-   - Export key in your shell:
-     ```bash
-     export ANTHROPIC_API_KEY=<your-key>
-     ```
-   - Avoid pasting secrets into shell history when possible.
+1. **AWS account access** (identity + permissions + region).
+2. **Network source IP/CIDR** for SSH allow-listing.
+3. **Anthropic API key** for model access.
 
-6. **Pick secure network settings**
-   - Set `--ssh-cidr` to your IP/CIDR (do not leave broad open SSH in production).
-   - Decide if app port should be public or later restricted via SG/ALB/WAF.
+---
 
-7. **Decide cost mode**
-   - Default on-demand `t3a.large` for balanced cost/effectiveness.
-   - Add `--spot` if interruption is acceptable.
+### 1) Install required tools
+
+#### macOS (Homebrew)
+
+```bash
+brew install awscli
+```
+
+#### Ubuntu / Debian
+
+```bash
+sudo apt-get update
+sudo apt-get install -y awscli
+```
+
+#### Verify tools
+
+```bash
+aws --version
+bash --version
+```
+
+What these commands mean:
+
+- `aws --version`: confirms AWS CLI is installed and callable in your shell.
+- `bash --version`: confirms you are running Bash (scripts are Bash-based).
+
+---
+
+### 2) Prepare AWS identity and credentials
+
+You can use access keys, SSO, or an assumed role. The scripts only need that `aws` CLI commands succeed.
+
+#### Option A: `aws configure` (access key based)
+
+```bash
+aws configure
+```
+
+You will be prompted for:
+
+- `AWS Access Key ID`
+- `AWS Secret Access Key`
+- `Default region name` (example: `us-east-1`)
+- `Default output format` (you can set `json`)
+
+#### Option B: SSO profile
+
+```bash
+aws configure sso
+aws sso login --profile <your-sso-profile>
+export AWS_PROFILE=<your-sso-profile>
+```
+
+#### Verify identity (required)
+
+```bash
+aws sts get-caller-identity
+```
+
+What it means:
+
+- This API call proves your credentials are valid and shows which account/user/role the script will use.
+- If this fails, setup script will fail too.
+
+---
+
+### 3) Choose and verify AWS region
+
+Pick one region first (for example `us-east-1`) and use it consistently.
+
+#### Option A: pass region in script
+
+```bash
+./scripts/create_openclaw_aws.sh --region us-east-1 --anthropic-api-key "$ANTHROPIC_API_KEY"
+```
+
+#### Option B: set environment default
+
+```bash
+export AWS_REGION=us-east-1
+export AWS_DEFAULT_REGION=us-east-1
+```
+
+#### Quick region check
+
+```bash
+aws ec2 describe-availability-zones --region us-east-1 --query 'AvailabilityZones[].ZoneName' --output text
+```
+
+What it means:
+
+- If this command returns zones, your region is reachable and your credentials can query EC2 there.
+
+---
+
+### 4) Confirm IAM permissions before you start
+
+Minimum permissions needed by these scripts:
+
+- `ec2:RunInstances`, `ec2:TerminateInstances`, `ec2:Describe*`
+- `ec2:CreateSecurityGroup`, `ec2:AuthorizeSecurityGroupIngress`, `ec2:DeleteSecurityGroup`
+- `ec2:CreateKeyPair`, `ec2:DeleteKeyPair`
+- `ssm:GetParameter` for AWS public AMI parameter paths (Amazon Linux latest)
+
+#### Fast preflight test
+
+```bash
+aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --region us-east-1
+```
+
+What it means:
+
+- This confirms the script can fetch a valid Amazon Linux 2023 AMI ID through SSM.
+
+If you get AccessDenied, ask your AWS admin for the IAM permissions above before running setup.
+
+---
+
+### 5) Prepare your public IP/CIDR for `--ssh-cidr`
+
+The script opens SSH (port 22) only for the CIDR you provide. This is a security-critical setting.
+
+#### Get your current public IP
+
+```bash
+curl -s https://checkip.amazonaws.com
+```
+
+If output is `198.51.100.25`, then use:
+
+```text
+198.51.100.25/32
+```
+
+Why `/32`?
+
+- `/32` means exactly one IP address (yours), which is the safest standard option.
+
+If your IP changes often (home ISP), you may need to update SG rules later or re-run with your new IP.
+
+---
+
+### 6) Get and secure your Anthropic API key
+
+You need one valid key with model access for your selected models.
+
+#### How to get it
+
+1. Sign in to Anthropic Console.
+2. Go to API key management.
+3. Create a new key for this project.
+4. Copy the key once and store it in a secure secret manager/password manager.
+
+#### Export key in your current shell session
+
+```bash
+export ANTHROPIC_API_KEY='your-real-key-value'
+```
+
+#### Verify it is set (without printing secret)
+
+```bash
+test -n "$ANTHROPIC_API_KEY" && echo "ANTHROPIC_API_KEY is set" || echo "ANTHROPIC_API_KEY is missing"
+```
+
+Security notes:
+
+- Do not commit keys into git.
+- Avoid putting the raw key into shared shell history, chat logs, or screenshots.
+- Prefer short-lived or project-scoped keys when possible.
+
+---
+
+### 7) Decide cost mode and instance shape
+
+Default script choice is a balanced starting point:
+
+- Instance type: `t3a.large` (2 vCPU, 8 GiB RAM)
+- Purchase model: on-demand
+
+Optional:
+
+- Add `--spot` to reduce cost if interruptions are acceptable.
+- Increase to `t3a.xlarge` if workload concurrency grows.
+
+---
+
+### 8) Final preflight commands (copy/paste)
+
+Run these right before provisioning:
+
+```bash
+aws sts get-caller-identity
+aws ec2 describe-availability-zones --region us-east-1 --query 'AvailabilityZones[].ZoneName' --output text
+aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --region us-east-1 --query 'Parameter.Value' --output text
+test -n "$ANTHROPIC_API_KEY" && echo "ANTHROPIC_API_KEY is set" || echo "ANTHROPIC_API_KEY is missing"
+curl -s https://checkip.amazonaws.com
+```
+
+If all succeed, you are ready.
 
 ---
 
