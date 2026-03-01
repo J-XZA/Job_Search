@@ -33,6 +33,23 @@ cd Job_Search
 ./scripts/create_openclaw_aws.sh --help
 ```
 
+### Windows 11 notes
+
+These scripts are Bash scripts. On Windows 11, run them from one of:
+
+- **WSL2** (recommended), or
+- **Git Bash**.
+
+Do **not** run them directly in `cmd.exe`.
+
+If you run from Git Bash and SSH later complains about private key permissions, run this from **PowerShell** in the repo directory:
+
+```powershell
+icacls ".\openclaw-<timestamp>-key.pem" /inheritance:r /grant:r "$env:USERNAME:R"
+```
+
+Then retry SSH.
+
 ---
 
 ## What should I do before running setup?
