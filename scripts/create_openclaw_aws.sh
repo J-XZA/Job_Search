@@ -41,6 +41,26 @@ require_cmd() {
   fi
 }
 
+set_key_file_permissions() {
+  local key_file="$1"
+
+  if chmod 400 "$key_file" 2>/dev/null; then
+    return 0
+  fi
+
+  case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+      echo "Warning: could not apply chmod 400 to $key_file in this Windows shell." >&2
+      echo "If SSH rejects the key, run this in PowerShell:" >&2
+      echo "  icacls \"$key_file\" /inheritance:r /grant:r \"$USERNAME:R\"" >&2
+      ;;
+    *)
+      echo "Error: failed to secure key file permissions for $key_file." >&2
+      exit 1
+      ;;
+  esac
+}
+
 REGION="us-east-1"
 INSTANCE_TYPE="t3a.large"
 NAME_PREFIX="openclaw"
@@ -161,7 +181,7 @@ aws ec2 authorize-security-group-ingress \
 
 echo "Creating key pair $KEY_NAME ..."
 aws ec2 create-key-pair --region "$REGION" --key-name "$KEY_NAME" --query 'KeyMaterial' --output text > "$KEY_FILE"
-chmod 400 "$KEY_FILE"
+set_key_file_permissions "$KEY_FILE"
 
 AMI_ID="$(aws ssm get-parameter --region "$REGION" --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query 'Parameter.Value' --output text)"
 
